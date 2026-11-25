@@ -15,6 +15,7 @@ use crate::tiling::*;
 use crate::util::{clamp, msb, CastFromPrimitive, Pixel};
 
 use crate::cpu_features::CpuFeatureLevel;
+use rayon::iter::*;
 use std::cmp;
 
 cfg_if::cfg_if! {
@@ -594,9 +595,9 @@ pub fn cdef_filter_superblock<T: Pixel>(
 //   don't exist.
 
 #[profiling::function]
-pub fn cdef_filter_tile<T: Pixel>(
+pub fn cdef_filter_tile<'a, T: Pixel>(
   fi: &FrameInvariants<T>, input: &Frame<T>, tb: &TileBlocks,
-  output: &mut TileMut<'_, T>,
+  output: &mut TileMut<'a, T>,
 ) {
   // Each filter block is 64x64, except right and/or bottom for non-multiple-of-64 sizes.
   // FIXME: 128x128 SB support will break this, we need FilterBlockOffset etc.
@@ -606,8 +607,14 @@ pub fn cdef_filter_tile<T: Pixel>(
   let fb_width = output.planes[0].rect().width.div_ceil(64);
   let fb_height = output.planes[0].rect().height.div_ceil(64);
 
-  // should parallelize this
-  for fby in 0..fb_height {
+  // fae patch: the rows of filter blocks in parallel (upstream: "should parallelize this"; on many
+  // cores this whole-frame pass was most of a big still image's encode time). A filter block writes
+  // only its own 64x64 area of `output` and reads `input` (the deblocked copy) and `tb`, so the rows
+  // never touch each other's data; the shared `&mut` goes through an address for that reason.
+  let out = output as *mut TileMut<'a, T> as usize;
+  (0..fb_height).into_par_iter().for_each(|fby| {
+    // SAFETY: see above, the rows write disjoint areas of the output.
+    let output = unsafe { &mut *(out as *mut TileMut<'a, T>) };
     for fbx in 0..fb_width {
       // tile_sbo is treated as an offset into the Tiles' plane
       // regions, not as an absolute offset in the visible frame.  The
@@ -621,5 +628,5 @@ pub fn cdef_filter_tile<T: Pixel>(
         fi, input, output, tb, tile_sbo, cdef_index, &cdef_dirs,
       );
     }
-  }
+  });
 }

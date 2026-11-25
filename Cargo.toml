@@ -383,3 +383,8 @@ inherits = "release"
 [profile.release-strip]
 inherits = "release"
 strip = "symbols"
+
+# fae: quiet the newer compiler about upstream code
+[lints.rust]
+deprecated = "allow"
+mismatched_lifetime_syntaxes = "allow"

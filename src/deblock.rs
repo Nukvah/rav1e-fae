@@ -1563,22 +1563,28 @@ fn sse_optimize<T: Pixel>(
   let mut level = [0; 4];
   let planes = if monochrome { 1 } else { MAX_PLANES };
 
-  for pli in 0..planes {
-    let mut v_tally: [i64; MAX_LOOP_FILTER + 2] = [0; MAX_LOOP_FILTER + 2];
-    let mut h_tally: [i64; MAX_LOOP_FILTER + 2] = [0; MAX_LOOP_FILTER + 2];
+  // fae patch: the planes' tallies in parallel (integer sums, the same result).
+  let tallies: Vec<_> = (0..planes)
+    .into_par_iter()
+    .map(|pli| {
+      let mut v_tally: [i64; MAX_LOOP_FILTER + 2] = [0; MAX_LOOP_FILTER + 2];
+      let mut h_tally: [i64; MAX_LOOP_FILTER + 2] = [0; MAX_LOOP_FILTER + 2];
+      sse_plane(
+        &rec.planes[pli],
+        &input.planes[pli],
+        &mut v_tally,
+        &mut h_tally,
+        pli,
+        blocks,
+        crop_w,
+        crop_h,
+        bd,
+      );
+      (v_tally, h_tally)
+    })
+    .collect();
 
-    sse_plane(
-      &rec.planes[pli],
-      &input.planes[pli],
-      &mut v_tally,
-      &mut h_tally,
-      pli,
-      blocks,
-      crop_w,
-      crop_h,
-      bd,
-    );
-
+  for (pli, (mut v_tally, mut h_tally)) in tallies.into_iter().enumerate() {
     for i in 1..=MAX_LOOP_FILTER {
       v_tally[i] += v_tally[i - 1];
       h_tally[i] += h_tally[i - 1];

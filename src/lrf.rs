@@ -7,6 +7,7 @@
 // Media Patent License 1.0 was not distributed with this source code in the
 // PATENTS file, you can obtain it at www.aomedia.org/license/patent.
 
+use rayon::iter::*;
 use std::cmp;
 use std::iter::FusedIterator;
 use std::ops::{Index, IndexMut};
@@ -1495,9 +1496,10 @@ impl RestorationState {
     // number of stripes (counted according to colocated Y luma position)
     let stripe_n = (fi.height + 7) / 64 + 1;
 
-    // Buffers for the stripe filter.
-    let mut stripe_filter_buffer =
-      IntegralImageBuffer::zeroed(STRIPE_IMAGE_SIZE);
+    // fae patch: the stripes in parallel (each with its own buffer for the stripe filter). A stripe
+    // writes only its own rows of `out` and reads `cdeffed` / `pre_cdef` (other frames), so the
+    // stripes never touch each other's data; the shared `&mut` goes through an address for that reason.
+    let out_addr = out as *mut Frame<T> as usize;
 
     for pli in 0..planes {
       let rp = &self.planes[pli];
@@ -1506,7 +1508,9 @@ impl RestorationState {
       let crop_w = (fi.width + (1 << xdec >> 1)) >> xdec;
       let crop_h = (fi.height + (1 << ydec >> 1)) >> ydec;
 
-      for si in 0..stripe_n {
+      (0..stripe_n).into_par_iter().for_each_init(|| IntegralImageBuffer::zeroed(STRIPE_IMAGE_SIZE), |stripe_filter_buffer, si| {
+        // SAFETY: see above, the stripes write disjoint rows of the output.
+        let out = unsafe { &mut *(out_addr as *mut Frame<T>) };
         let (stripe_start_y, stripe_size) = if si == 0 {
           (0, (64 - 8) >> ydec)
         } else {
@@ -1547,7 +1551,7 @@ impl RestorationState {
               }
 
               setup_integral_image(
-                &mut stripe_filter_buffer,
+                stripe_filter_buffer,
                 STRIPE_IMAGE_STRIDE,
                 crop_w - x,
                 (crop_h as isize - stripe_start_y) as usize,
@@ -1580,7 +1584,7 @@ impl RestorationState {
             }
           }
         }
-      }
+      });
     }
   }
 }
